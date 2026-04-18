@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { usePlaidLink } from "react-plaid-link";
-import { auth } from "../lib/firebase";
+import { auth } from "../../lib/firebase";
 
 export default function PlaidConnectButton() {
   const [linkToken, setLinkToken] = useState("");
