@@ -43,12 +43,16 @@ type UserFinanceData = {
   paydayAmount: number;
 };
 
+type PaymentCadence = "monthly" | "biweekly" | "one_time";
+
 type BillItem = {
   id: string;
   name: string;
   amount: number;
   dueDate?: string;
   recurring?: boolean;
+  paymentCadence?: PaymentCadence;
+  lastPaymentDate?: string;
   paid?: boolean;
   paidDate?: string;
 };
@@ -60,6 +64,8 @@ type DebtItem = {
   minimumPayment?: number;
   dueDate?: string;
   recurring?: boolean;
+  paymentCadence?: PaymentCadence;
+  lastPaymentDate?: string;
   paid?: boolean;
   paidDate?: string;
 };
@@ -181,14 +187,14 @@ export default function HomePage() {
 
   const [billName, setBillName] = useState("");
   const [billAmount, setBillAmount] = useState("");
-  const [billDueDate, setBillDueDate] = useState("");
-  const [billRecurring, setBillRecurring] = useState(true);
+  const [billLastPaymentDate, setBillLastPaymentDate] = useState("");
+  const [billPaymentCadence, setBillPaymentCadence] = useState<PaymentCadence>("monthly");
 
   const [debtName, setDebtName] = useState("");
   const [debtAmount, setDebtAmount] = useState("");
   const [debtMinimumPayment, setDebtMinimumPayment] = useState("");
-  const [debtDueDate, setDebtDueDate] = useState("");
-  const [debtRecurring, setDebtRecurring] = useState(true);
+  const [debtLastPaymentDate, setDebtLastPaymentDate] = useState("");
+  const [debtPaymentCadence, setDebtPaymentCadence] = useState<PaymentCadence>("monthly");
 
   const [profileNameInput, setProfileNameInput] = useState("");
   const [profileTypeInput, setProfileTypeInput] = useState<ProfileType>("");
@@ -199,6 +205,8 @@ export default function HomePage() {
   const [buyAmount, setBuyAmount] = useState("");
   const [buyNote, setBuyNote] = useState("");
   const [buyResult, setBuyResult] = useState("");
+  const [activeTab, setActiveTab] = useState<"home" | "insights" | "payments">("home");
+  const [showNotifications, setShowNotifications] = useState(false);
 
   const [plaidLinkToken, setPlaidLinkToken] = useState("");
   const [plaidStatus, setPlaidStatus] = useState("Not connected");
@@ -516,6 +524,21 @@ const estimatedCyclesToNextLevel =
     return entries[0] || null;
   }, [weeklyCategoryTotals]);
 
+  const categoryLimitRows = useMemo(() => {
+    return Object.entries(weeklyCategoryLimits)
+      .filter(([, limit]) => limit < 999999)
+      .map(([name, limit]) => {
+        const spent = weeklyCategoryTotals[name] || 0;
+        const remaining = Math.max(0, limit - spent);
+        const isOver = spent > limit;
+        const usagePct = limit > 0 ? Math.min(999, Math.round((spent / limit) * 100)) : 0;
+        const status =
+          isOver ? "Over Limit" : usagePct >= 90 ? "Close" : usagePct >= 60 ? "Watch" : "On Track";
+        return { name, limit, spent, remaining, isOver, usagePct, status };
+      })
+      .sort((a, b) => b.spent - a.spent);
+  }, [weeklyCategoryTotals]);
+
   const spendingInsights = useMemo(() => {
     const insights: string[] = [];
     if (topWeeklyCategory && totalWeeklySpent > 0) {
@@ -530,21 +553,23 @@ const estimatedCyclesToNextLevel =
     if (safeToSpend <= MIN_FUN_BUFFER) {
       insights.push(`You only have your minimum outing buffer left in safe to spend.`);
     }
+    const overLimitCategory = categoryLimitRows.find((row) => row.isOver);
+    if (overLimitCategory) {
+      insights.push(`${overLimitCategory.name} is over its weekly limit by $${(overLimitCategory.spent - overLimitCategory.limit).toFixed(2)}.`);
+    }
+    const closeLimitCategory = categoryLimitRows.find((row) => !row.isOver && row.usagePct >= 85);
+    if (closeLimitCategory) {
+      insights.push(`${closeLimitCategory.name} is close to its weekly limit with ${closeLimitCategory.usagePct}% used.`);
+    }
     return insights.length ? insights : ["Add transactions this week to unlock smarter spending insights."];
-  }, [topWeeklyCategory, totalWeeklySpent, billsTotal, debtTotal, totalBalance, safeToSpend]);
+  }, [topWeeklyCategory, totalWeeklySpent, billsTotal, debtTotal, totalBalance, safeToSpend, categoryLimitRows]);
 
-  const categoryLimitRows = useMemo(() => {
-    return Object.entries(weeklyCategoryLimits)
-      .filter(([name, limit]) => limit < 999999)
-      .map(([name, limit]) => {
-        const spent = weeklyCategoryTotals[name] || 0;
-        const remaining = Math.max(0, limit - spent);
-        const isOver = spent > limit;
-        return { name, limit, spent, remaining, isOver };
-      });
-  }, [weeklyCategoryTotals]);
 
   const nowDate = new Date();
+  const daysUntilNextPayday =
+    payCycleInfo.nextPayDateRaw
+      ? Math.max(0, Math.ceil((payCycleInfo.nextPayDateRaw.getTime() - nowDate.getTime()) / 86400000))
+      : null;
   const billReminderBuckets = useMemo(() => {
     let overdue = 0;
     let dueSoon = 0;
@@ -559,6 +584,29 @@ const estimatedCyclesToNextLevel =
     }
     return { overdue, dueSoon, dueThisWeek };
   }, [billViews, debtViews, nowDate]);
+
+
+const notificationItems = useMemo(() => {
+  return [...billViews, ...debtViews]
+    .filter((item) => item.effectiveDueDateRaw && !item.paidForCurrentCycle)
+    .map((item) => {
+      const amount = "minimumPayment" in item ? Number(item.minimumPayment || item.amount || 0) : Number(item.amount || 0);
+      const diffDays = Math.ceil(((item.effectiveDueDateRaw as Date).getTime() - nowDate.getTime()) / 86400000);
+      return {
+        id: item.id,
+        name: item.name,
+        amount,
+        diffDays,
+        dueDate: item.effectiveDueDateRaw as Date,
+        kind: "minimumPayment" in item ? "Debt" : "Bill",
+      };
+    })
+    .filter((item) => item.diffDays <= 7)
+    .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime());
+}, [billViews, debtViews, nowDate]);
+
+const showStartHere = completedSteps < onboardingSteps.length;
+
 
 
 const mainInsight = useMemo(() => {
@@ -672,7 +720,7 @@ const momentumMessage = useMemo(() => {
   async function handleAddBill() {
     if (!user) return;
     const amount = Number(billAmount);
-    if (!billName.trim() || !amount || amount <= 0 || !billDueDate) {
+    if (!billName.trim() || !amount || amount <= 0 || !billLastPaymentDate) {
       alert("Fill out the full bill.");
       return;
     }
@@ -682,8 +730,8 @@ const momentumMessage = useMemo(() => {
       await addDoc(collection(db, "users", user.uid, "bills"), {
         name: billName.trim(),
         amount,
-        dueDate: billDueDate,
-        recurring: billRecurring,
+        lastPaymentDate: billLastPaymentDate,
+        paymentCadence: billPaymentCadence,
         paid: false,
         paidDate: "",
         createdAt: serverTimestamp(),
@@ -693,8 +741,8 @@ const momentumMessage = useMemo(() => {
       await loadTransactions(user.uid);
       setBillName("");
       setBillAmount("");
-      setBillDueDate("");
-      setBillRecurring(true);
+      setBillLastPaymentDate("");
+      setBillPaymentCadence("monthly");
       setShowBill(false);
       setCommandMessage(`Bill "${billName.trim()}" added.`);
     } finally {
@@ -706,7 +754,7 @@ const momentumMessage = useMemo(() => {
     if (!user) return;
     const amount = Number(debtAmount);
     const minimumPayment = Number(debtMinimumPayment);
-    if (!debtName.trim() || !amount || amount <= 0 || !minimumPayment || minimumPayment <= 0 || !debtDueDate) {
+    if (!debtName.trim() || !amount || amount <= 0 || !minimumPayment || minimumPayment <= 0 || !debtLastPaymentDate) {
       alert("Fill out the full debt.");
       return;
     }
@@ -717,8 +765,8 @@ const momentumMessage = useMemo(() => {
         name: debtName.trim(),
         amount,
         minimumPayment,
-        dueDate: debtDueDate,
-        recurring: debtRecurring,
+        lastPaymentDate: debtLastPaymentDate,
+        paymentCadence: debtPaymentCadence,
         paid: false,
         paidDate: "",
         createdAt: serverTimestamp(),
@@ -729,8 +777,8 @@ const momentumMessage = useMemo(() => {
       setDebtName("");
       setDebtAmount("");
       setDebtMinimumPayment("");
-      setDebtDueDate("");
-      setDebtRecurring(true);
+      setDebtLastPaymentDate("");
+      setDebtPaymentCadence("monthly");
       setShowDebt(false);
       setCommandMessage(`Debt "${debtName.trim()}" added.`);
     } finally {
@@ -844,11 +892,32 @@ if (loading) {
     <main className="min-h-screen bg-[#0d0d0f] text-[#f5f5f5]">
       <header className="border-b border-[#2a2a2f] bg-[#111216]">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5">
-          <div className="flex items-center gap-3">
-            <Image src="/guest-vaults-logo.jpg" alt="Guest Vaults logo" width={48} height={48} className="h-12 w-12 rounded-md object-contain" />
-            <span className="text-lg font-bold md:text-xl">Guest Vaults</span>
+          <div className="flex items-center gap-5">
+            <div className="flex items-center gap-3">
+              <Image src="/guest-vaults-logo.jpg" alt="Guest Vaults logo" width={48} height={48} className="h-12 w-12 rounded-md object-contain" />
+              <span className="text-lg font-bold md:text-xl">Guest Vaults</span>
+            </div>
+            <div className="hidden md:flex items-center gap-2">
+              {[
+                { key: "home", label: "Home" },
+                { key: "insights", label: "Growth Hub" },
+                { key: "payments", label: "Payments Hub" },
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => setActiveTab(tab.key as "home" | "insights" | "payments")}
+                  className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                    activeTab === tab.key
+                      ? "border-[#d4af37] bg-[#2a2415] text-[#f5e4a3]"
+                      : "border-[#3a3a42] bg-[#1a1b20] text-slate-300 hover:bg-[#23242b]"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="relative flex items-center gap-3">
             <button
               onClick={() => {
                 setProfileNameInput(fullName);
@@ -871,9 +940,54 @@ if (loading) {
             >
               Log Out
             </button>
+            <button
+              onClick={() => setShowNotifications((v) => !v)}
+              className="relative rounded-full border border-[#d4af37] bg-[#1a1b20] px-4 py-2 font-semibold text-[#f5e4a3] hover:bg-[#23242b]"
+              aria-label="Notifications"
+            >
+              🔔
+              {notificationItems.length > 0 ? (
+                <span className="absolute -right-1 -top-1 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-[#c25757] px-1 text-[11px] text-white">
+                  {notificationItems.length}
+                </span>
+              ) : null}
+            </button>
+
+            {showNotifications ? (
+              <div className="absolute right-0 top-14 z-40 w-[340px] rounded-2xl border border-[#2a2a2f] bg-[#17181d] p-4 shadow-2xl">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-lg font-bold text-white">Due Within 7 Days</h3>
+                  <span className="text-sm text-slate-400">{notificationItems.length} item{notificationItems.length === 1 ? "" : "s"}</span>
+                </div>
+                <div className="space-y-3">
+                  {notificationItems.length === 0 ? (
+                    <div className="rounded-xl border border-[#2a2a2f] bg-[#111216] p-4 text-sm text-slate-400">
+                      No bills or debt payments due within the next week.
+                    </div>
+                  ) : (
+                    notificationItems.map((item) => (
+                      <div key={`${item.kind}-${item.id}`} className="rounded-xl border border-[#2a2a2f] bg-[#111216] p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold uppercase tracking-wide text-[#d4af37]">{item.kind}</p>
+                            <p className="mt-1 text-base font-bold text-white">{item.name}</p>
+                            <p className="mt-1 text-sm text-slate-400">
+                              {item.diffDays < 0 ? `${Math.abs(item.diffDays)} day${Math.abs(item.diffDays) === 1 ? "" : "s"} overdue` : item.diffDays === 0 ? "Due today" : `Due in ${item.diffDays} day${item.diffDays === 1 ? "" : "s"}`}
+                            </p>
+                            <p className="text-xs text-slate-500">{formatMilitaryDate(item.dueDate)}</p>
+                          </div>
+                          <div className="text-right text-lg font-extrabold text-[#f5e4a3]">${item.amount.toFixed(2)}</div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       </header>
+
 
       <section className="mx-auto max-w-7xl px-6 py-10">
         <div className="mb-8 grid gap-6 lg:grid-cols-[180px_1fr] lg:items-center">
@@ -885,398 +999,389 @@ if (loading) {
               {getGreeting()}, <span className="text-[#d4af37]">{fullName?.trim() || "User"}</span>
             </h1>
             <p className="mt-3 max-w-3xl text-base text-slate-400 md:text-lg">
-              {fullName?.trim() ? `Let\'s lock in your money today, ${fullName.trim()}.` : "Your budget, bills, debt, pay cycle, and bank connection all in one place."}
+              {fullName?.trim() ? `Let's lock in your money today, ${fullName.trim()}.` : "Your budget, bills, debt, pay cycle, and bank connection all in one place."}
             </p>
             <div className="mt-4 h-2 w-32 bg-[#d4af37]" />
           </div>
         </div>
 
-        <section className="mb-8 rounded-2xl border border-[#3a3120] bg-[#17181d] p-6 shadow-sm">
-  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-    <div className="min-w-0">
-      <p className="text-sm font-semibold uppercase tracking-wide text-[#d4af37]">Main Insight</p>
-      <h2 className="mt-2 text-2xl font-extrabold md:text-3xl">{mainInsight}</h2>
-      <p className="mt-3 text-sm leading-6 text-slate-400 md:text-base">{momentumMessage}</p>
-    </div>
-    <div className="rounded-xl border border-[#2a2a2f] bg-[#111216] px-4 py-3 text-right">
-      <p className="text-xs uppercase tracking-wide text-slate-500">Savings Progress</p>
-      <p className="mt-1 text-2xl font-extrabold text-[#9ad6b2]">{savingsProgressPercent.toFixed(0)}%</p>
-    </div>
-  </div>
-</section>
+        {activeTab === "home" ? (
+          <>
+            <section className="mb-8 rounded-2xl border border-[#3a3120] bg-[#17181d] p-6 shadow-sm">
+              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold uppercase tracking-wide text-[#d4af37]">Main Insight</p>
+                  <h2 className="mt-2 text-2xl font-extrabold md:text-3xl">{mainInsight}</h2>
+                  <p className="mt-3 text-sm leading-6 text-slate-400 md:text-base">{momentumMessage}</p>
+                </div>
+                <div className="rounded-xl border border-[#2a2a2f] bg-[#111216] px-4 py-3 text-right">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Savings Progress</p>
+                  <p className="mt-1 text-2xl font-extrabold text-[#9ad6b2]">{savingsProgressPercent.toFixed(0)}%</p>
+                </div>
+              </div>
+            </section>
 
-<section className="mb-8 rounded-2xl border border-[#2a2a2f] bg-[#17181d] p-6 shadow-sm">
-          <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <h2 className="text-2xl font-extrabold md:text-3xl">Start Here</h2>
-              <p className="mt-2 max-w-3xl text-base text-slate-400 md:text-lg">
-                Follow these steps to set up Guest Vaults the way a real user would.
-              </p>
-            </div>
-            <div className="rounded-xl border border-[#b68a2d] bg-[#111216] px-4 py-3">
-              <p className="text-xs uppercase tracking-wide text-[#d4af37] md:text-sm">Progress</p>
-              <p className="text-2xl font-extrabold text-[#f5e4a3] md:text-3xl">
-                {completedSteps}/{onboardingSteps.length}
-              </p>
-            </div>
-          </div>
+            {showStartHere ? (
+              <section className="mb-8 rounded-2xl border border-[#2a2a2f] bg-[#17181d] p-6 shadow-sm">
+                <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <h2 className="text-2xl font-extrabold md:text-3xl">Start Here</h2>
+                    <p className="mt-2 max-w-3xl text-base text-slate-400 md:text-lg">
+                      Follow these steps to set up Guest Vaults the way a real user would.
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-[#b68a2d] bg-[#111216] px-4 py-3">
+                    <p className="text-xs uppercase tracking-wide text-[#d4af37] md:text-sm">Progress</p>
+                    <p className="text-2xl font-extrabold text-[#f5e4a3] md:text-3xl">
+                      {completedSteps}/{onboardingSteps.length}
+                    </p>
+                  </div>
+                </div>
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            {onboardingSteps.map((step, index) => (
-              <div key={step.title} className="rounded-2xl border border-[#2a2a2f] bg-[#111216] p-5">
-                <div className="flex items-start justify-between gap-4">
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {onboardingSteps.map((step, index) => (
+                    <div key={step.title} className="rounded-2xl border border-[#2a2a2f] bg-[#111216] p-5">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold uppercase tracking-wide text-[#d4af37]">Step {index + 1}</p>
+                          <h3 className="mt-1 text-xl font-bold md:text-2xl">{step.title}</h3>
+                          <p className="mt-2 text-sm leading-6 text-slate-400 md:text-base">{step.description}</p>
+                        </div>
+                        <div
+                          className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${
+                            step.done
+                              ? "border border-[#2d6a4f] bg-[#183a2b] text-[#b7e4c7]"
+                              : "border border-[#d4af37] bg-[#2a2415] text-[#f5e4a3]"
+                          }`}
+                        >
+                          {step.done ? "Done" : "Next"}
+                        </div>
+                      </div>
+                      <div className="mt-4">
+                        <button
+                          onClick={step.onClick}
+                          className={`rounded-xl border px-4 py-3 text-sm font-semibold transition md:text-base ${
+                            step.done
+                              ? "border-[#2d6a4f] text-[#b7e4c7] hover:bg-[#183a2b]"
+                              : "border-[#d4af37] text-[#f5e4a3] hover:bg-[#23242b]"
+                          }`}
+                        >
+                          {step.actionLabel}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            <section className="mb-8 grid gap-6 lg:grid-cols-[1.85fr_1fr]">
+              <div id="budget-breakdown" className="rounded-2xl border border-[#2a2a2f] bg-[#17181d] p-6">
+                <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold uppercase tracking-wide text-[#d4af37]">Step {index + 1}</p>
-                    <h3 className="mt-1 text-xl font-bold md:text-2xl">{step.title}</h3>
-                    <p className="mt-2 text-sm leading-6 text-slate-400 md:text-base">{step.description}</p>
+                    <h2 className="text-2xl font-extrabold md:text-3xl">Budget Breakdown</h2>
+                    <p className="mt-2 max-w-2xl text-base text-slate-400 md:text-lg">
+                      Priority goes in this order: total balance, bills, debt, building savings, then safe to spend.
+                      Safe to spend should still leave enough to eat out or go out at least once during the pay cycle.
+                    </p>
                   </div>
-                  <div
-                    className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${
-                      step.done
-                        ? "border border-[#2d6a4f] bg-[#183a2b] text-[#b7e4c7]"
-                        : "border border-[#d4af37] bg-[#2a2415] text-[#f5e4a3]"
-                    }`}
-                  >
-                    {step.done ? "Done" : "Next"}
+                  <div className="rounded-xl border border-[#b68a2d] bg-[#111216] px-4 py-3">
+                    <p className="text-xs uppercase tracking-wide text-[#d4af37] md:text-sm">Vault Score</p>
+                    <p className="text-2xl font-extrabold text-[#f5e4a3] md:text-3xl">{vaultScore}/100</p>
                   </div>
                 </div>
-                <div className="mt-4">
-                  <button
-                    onClick={step.onClick}
-                    className={`rounded-xl border px-4 py-3 text-sm font-semibold transition md:text-base ${
-                      step.done
-                        ? "border-[#2d6a4f] text-[#b7e4c7] hover:bg-[#183a2b]"
-                        : "border-[#d4af37] text-[#f5e4a3] hover:bg-[#23242b]"
-                    }`}
-                  >
-                    {step.actionLabel}
-                  </button>
+
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                  <BudgetCard title="Total Balance" amount={`$${totalBalance.toFixed(2)}`} percent={`${totalBalancePct}%`} amountClass="text-[#d4af37]" />
+                  <BudgetCard title="Bills" amount={`$${billsTotal.toFixed(2)}`} percent={`${billsPct}%`} amountClass="text-[#c59a3d]" />
+                  <BudgetCard title="Debt" amount={`$${debtTotal.toFixed(2)}`} percent={`${debtPct}%`} amountClass="text-[#c25757]" />
+                  <BudgetCard title="Savings Contribution" amount={`$${savingsContribution.toFixed(2)}`} percent={`${savingsContributionPct}%`} amountClass="text-[#9ad6b2]" />
+                  <BudgetCard title="Safe to Spend" amount={`$${safeToSpend.toFixed(2)}`} percent={`${safeToSpendPct}%`} amountClass="text-[#f5e4a3]" />
+                </div>
+
+                <div className="mt-6 grid gap-4 lg:grid-cols-3">
+                  <InfoMini title="Remaining After Bills" value={`$${remainingAfterBills.toFixed(2)}`} sub="Balance after covering bills" className="text-[#f5e4a3]" />
+                  <InfoMini title="Remaining After Debt" value={`$${remainingAfterDebt.toFixed(2)}`} sub="Balance after covering bills and debt" className="text-[#f1b4b4]" />
+                  <InfoMini title="Pay-Period Safe to Spend" value={`$${payPeriodSafeToSpend.toFixed(2)}`} sub="Still leaves room for at least one outing this pay cycle" className="text-[#d4af37]" />
                 </div>
               </div>
-            ))}
-          </div>
-        </section>
 
-        <section className="mb-8 grid gap-6 lg:grid-cols-[1.85fr_1fr]">
-          <div id="budget-breakdown" className="rounded-2xl border border-[#2a2a2f] bg-[#17181d] p-6">
-            <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-              <div className="min-w-0">
-                <h2 className="text-2xl font-extrabold md:text-3xl">Budget Breakdown</h2>
-                <p className="mt-2 max-w-2xl text-base text-slate-400 md:text-lg">
-                  Priority goes in this order: total balance, bills, debt, building savings, then safe to spend.
-                  Safe to spend should still leave enough to eat out or go out at least once during the pay cycle.
-                </p>
-              </div>
-              <div className="rounded-xl border border-[#b68a2d] bg-[#111216] px-4 py-3">
-                <p className="text-xs uppercase tracking-wide text-[#d4af37] md:text-sm">Vault Score</p>
-                <p className="text-2xl font-extrabold text-[#f5e4a3] md:text-3xl">{vaultScore}/100</p>
-              </div>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-              <BudgetCard title="Total Balance" amount={`$${totalBalance.toFixed(2)}`} percent={`${totalBalancePct}%`} amountClass="text-[#d4af37]" />
-              <BudgetCard title="Bills" amount={`$${billsTotal.toFixed(2)}`} percent={`${billsPct}%`} amountClass="text-[#c59a3d]" />
-              <BudgetCard title="Debt" amount={`$${debtTotal.toFixed(2)}`} percent={`${debtPct}%`} amountClass="text-[#c25757]" />
-              <BudgetCard title="Savings Contribution" amount={`$${savingsContribution.toFixed(2)}`} percent={`${savingsContributionPct}%`} amountClass="text-[#9ad6b2]" />
-              <BudgetCard title="Safe to Spend" amount={`$${safeToSpend.toFixed(2)}`} percent={`${safeToSpendPct}%`} amountClass="text-[#f5e4a3]" />
-            </div>
-
-            <div className="mt-6 grid gap-4 lg:grid-cols-3">
-              <InfoMini title="Remaining After Bills" value={`$${remainingAfterBills.toFixed(2)}`} sub="Balance after covering bills" className="text-[#f5e4a3]" />
-              <InfoMini title="Remaining After Debt" value={`$${remainingAfterDebt.toFixed(2)}`} sub="Balance after covering bills and debt" className="text-[#f1b4b4]" />
-              <InfoMini title="Pay-Period Safe to Spend" value={`$${payPeriodSafeToSpend.toFixed(2)}`} sub="Still leaves room for at least one outing this pay cycle" className="text-[#d4af37]" />
-            </div>
-
-            <div className="mt-6 grid gap-4 lg:grid-cols-2">
-              <div className="rounded-2xl border border-[#2a2a2f] bg-[#111216] p-5">
-                <p className="text-base font-semibold text-slate-400">Current Savings Level</p>
-                <p className="mt-2 text-2xl font-extrabold text-[#9ad6b2]">{currentSavingsLevel}</p>
-                <div className="mt-4 h-3 overflow-hidden rounded-full bg-[#0d0d0f]">
-                  <div
-                    className="h-full rounded-full bg-[#9ad6b2] transition-all"
-                    style={{ width: `${savingsProgressPercent}%` }}
-                  />
-                </div>
-                <p className="mt-2 text-sm text-slate-400">{savingsProgressPercent.toFixed(0)}% toward {nextSavingsLevel ? nextSavingsLevel.name : "top level"}</p>
-                <p className="mt-2 text-sm text-slate-400">
-                  Savings tracked with: <span className="font-semibold text-[#f5e4a3]">{isPremium ? "Premium savings balance" : "Total balance for now"}</span>
-                </p>
-              </div>
-              <div className="rounded-2xl border border-[#2a2a2f] bg-[#111216] p-5">
-                <p className="text-base font-semibold text-slate-400">Next Savings Target</p>
-                <p className="mt-2 text-2xl font-extrabold text-[#f5e4a3]">
-                  {nextSavingsLevel ? `${nextSavingsLevel.name} — $${nextSavingsLevel.min.toFixed(2)}` : "Top level reached"}
-                </p>
-                <p className="mt-2 text-sm text-slate-400">
-                  {nextSavingsLevel
-                    ? `$${Math.max(0, nextSavingsLevel.min - savingsProgressAmount).toFixed(2)} left to reach the next level.${estimatedCyclesToNextLevel ? ` About ${estimatedCyclesToNextLevel} pay cycle${estimatedCyclesToNextLevel === 1 ? "" : "s"} at your current pace.` : ""}`
-                    : "You have reached the current top ladder target."}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <aside className="space-y-5">
-            <SideCard title="Profile">
-              <p className="whitespace-pre-line text-base leading-7 text-slate-400 md:text-lg">
-                {`Type: ${getProfileLabel(profileType)}
+              <aside className="space-y-5">
+                <SideCard title="Profile">
+                  <p className="whitespace-pre-line text-base leading-7 text-slate-400 md:text-lg">
+                    {`Type: ${getProfileLabel(profileType)}
 Pay Cycle: ${getPayCycleLabel(payCycle)}
 Last Payday: ${formatMilitaryDate(lastPayday)}`}
-              </p>
-              <button
-                onClick={() => {
-                  setProfileNameInput(fullName);
-                  setProfileTypeInput(profileType);
-                  setPayCycleInput(payCycle);
-                  setLastPaydayInput(lastPayday);
-                  setPaydayAmountInput(paydayAmount ? String(paydayAmount) : "");
-                  setShowProfile(true);
-                }}
-                className="mt-5 text-base font-semibold text-[#f5e4a3] hover:underline"
-              >
-                Edit profile ›
-              </button>
-            </SideCard>
-
-            <SideCard title="Weekly Command">
-              <p className="text-base leading-7 text-slate-400 md:text-lg">{momentumMessage}</p>
-            </SideCard>
-
-            <div id="banking-card">
-              <SideCard title="Banking">
-                <p className="mb-4 text-base leading-7 text-slate-400 md:text-lg">
-                  Connect your bank with Plaid to prepare for automatic transaction syncing.
-                </p>
-                <div className="space-y-3">
+                  </p>
                   <button
-                    onClick={() => openPlaid()}
-                    disabled={!plaidReady || !plaidLinkToken}
-                    className="w-full rounded-xl border border-[#d4af37] px-4 py-3 font-semibold text-[#f5e4a3] hover:bg-[#23242b] disabled:opacity-50"
+                    onClick={() => {
+                      setProfileNameInput(fullName);
+                      setProfileTypeInput(profileType);
+                      setPayCycleInput(payCycle);
+                      setLastPaydayInput(lastPayday);
+                      setPaydayAmountInput(paydayAmount ? String(paydayAmount) : "");
+                      setShowProfile(true);
+                    }}
+                    className="mt-5 text-base font-semibold text-[#f5e4a3] hover:underline"
                   >
-                    Connect Bank with Plaid
+                    Edit profile ›
                   </button>
-                  <p className="text-sm text-slate-400">Status: {plaidStatus}</p>
+                </SideCard>
+
+                <SideCard title="Weekly Command">
+                  <p className="text-base leading-7 text-slate-400 md:text-lg">{momentumMessage}</p>
+                </SideCard>
+
+                <div id="banking-card">
+                  <SideCard title="Banking">
+                    <p className="mb-4 text-base leading-7 text-slate-400 md:text-lg">
+                      Connect your bank with Plaid to prepare for automatic transaction syncing.
+                    </p>
+                    <div className="space-y-3">
+                      <button
+                        onClick={() => openPlaid()}
+                        disabled={!plaidReady || !plaidLinkToken}
+                        className="w-full rounded-xl border border-[#d4af37] px-4 py-3 font-semibold text-[#f5e4a3] hover:bg-[#23242b] disabled:opacity-50"
+                      >
+                        Connect Bank with Plaid
+                      </button>
+                      <p className="text-sm text-slate-400">Status: {plaidStatus}</p>
+                    </div>
+                  </SideCard>
                 </div>
-              </SideCard>
-            </div>
-          </aside>
-        </section>
+              </aside>
+            </section>
 
-        <section className="mb-8 rounded-2xl border border-[#2a2a2f] bg-[#17181d] p-6 shadow-sm">
-          <div className="mb-5 flex items-center justify-between">
-            <h2 className="text-2xl font-extrabold md:text-3xl">Savings Ladder</h2>
-            <div className="rounded-xl border border-[#2a2a2f] bg-[#111216] px-4 py-2 text-sm text-slate-400">
-              Tracked amount: <span className="font-bold text-[#f5e4a3]">${savingsProgressAmount.toFixed(2)}</span>
-            </div>
-          </div>
+            <section className="mb-8 grid gap-6 lg:grid-cols-2">
+              <section className="overflow-hidden rounded-2xl border border-[#2a2a2f] bg-[#17181d]">
+                <div className="flex flex-col gap-6 bg-[#111216] px-6 py-5 md:flex-row md:items-center md:justify-between">
+                  <h2 className="text-3xl font-extrabold text-[#f5e4a3] md:text-4xl">Vault</h2>
+                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                    <MiniAction text="Can I Buy This" onClick={() => setShowBuy(true)} />
+                    <MiniAction text="Bills" onClick={() => setShowBill(true)} />
+                    <MiniAction text="Debt" onClick={() => setShowDebt(true)} />
+                    <MiniAction text="Add" onClick={() => setShowAdd(true)} />
+                  </div>
+                </div>
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            {savingsLevels.map((level) => (
-              <div key={level.name} className="rounded-2xl border border-[#2a2a2f] bg-[#111216] p-5">
-                <p className="text-xl font-bold text-white">{level.name}</p>
-                <p className="mt-2 text-sm font-semibold text-[#d4af37]">Target: ${level.min.toFixed(2)}</p>
-                <ul className="mt-4 space-y-2 text-sm leading-6 text-slate-300">
-                  {level.bullets.map((point) => (
-                    <li key={point}>• {point}</li>
+                <div className="px-6 py-3">
+                  <RowLine title="Guest Vault" subtitle="Total balance" amount={`$${totalBalance.toFixed(2)}`} amountClass="text-[#d4af37]" />
+                  <RowLine title="Bills" subtitle="Priority item 1 after balance" amount={`-$${billsTotal.toFixed(2)}`} amountClass="text-[#c59a3d]" />
+                  <RowLine title="Debt" subtitle="Priority item 2 after bills" amount={`-$${debtTotal.toFixed(2)}`} amountClass="text-[#c25757]" />
+                  <RowLine title="Building Savings" subtitle="Priority item 3 before flexible spending" amount={`$${savingsContribution.toFixed(2)}`} amountClass="text-[#9ad6b2]" />
+                  <RowLine title="Safe to Spend" subtitle="Flexible money after priorities and still leaves outing room" amount={`$${safeToSpend.toFixed(2)}`} amountClass="text-[#f5e4a3]" />
+                </div>
+              </section>
+
+              <BlockCard title="Category Limits" button="Open" onClick={() => undefined}>
+                <div className="space-y-3">
+                  {categoryLimitRows.map((row) => (
+                    <div key={row.name} className="rounded-xl border border-[#2a2a2f] bg-[#111216] p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="text-base font-semibold text-white">{row.name}</p>
+                          <p className="text-sm text-slate-400">Weekly limit: ${row.limit.toFixed(2)} • Spent: ${row.spent.toFixed(2)}</p>
+                        </div>
+                        <div
+                          className={`rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-wide ${
+                            row.isOver
+                              ? "border-[#c25757] bg-[#2a1717] text-[#f5b1b1]"
+                              : row.usagePct >= 90
+                              ? "border-[#d4af37] bg-[#2a2415] text-[#f5e4a3]"
+                              : row.usagePct >= 60
+                              ? "border-[#9b7a22] bg-[#1f1a10] text-[#f0d68d]"
+                              : "border-[#2d6a4f] bg-[#183a2b] text-[#b7e4c7]"
+                          }`}
+                        >
+                          {row.status}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-between text-sm">
+                        <span className="text-slate-400">{row.usagePct}% used</span>
+                        <span className={`font-semibold ${row.isOver ? "text-[#f5b1b1]" : "text-[#f5e4a3]"}`}>
+                          {row.isOver ? `Over by $${(row.spent - row.limit).toFixed(2)}` : `$${row.remaining.toFixed(2)} left`}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#23242b]">
+                        <div className={`h-full transition-all ${row.isOver ? "bg-[#c25757]" : row.usagePct >= 90 ? "bg-[#d4af37]" : "bg-[#9ad6b2]"}`} style={{ width: `${Math.min(100, row.usagePct)}%` }} />
+                      </div>
+
+                      <p className="mt-3 text-sm text-slate-400">
+                        {row.isOver
+                          ? `You need to cut back $${(row.spent - row.limit).toFixed(2)} in ${row.name.toLowerCase()} to get back on track this week.`
+                          : row.usagePct >= 90
+                          ? `Be careful — ${row.name.toLowerCase()} is almost tapped out for this week.`
+                          : row.usagePct >= 60
+                          ? `Watch ${row.name.toLowerCase()} — it is moving faster than the rest of your budget.`
+                          : `${row.name} is under control this week.`}
+                      </p>
+                    </div>
                   ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-        </section>
+                </div>
+              </BlockCard>
+            </section>
 
-        <section className="mb-8 grid gap-6 lg:grid-cols-3">
-          <BlockCard title="Bill Reminders" button="Open" onClick={() => undefined}>
-            <div className="grid gap-4 md:grid-cols-3">
-              <ReminderCard title="Overdue" count={billReminderBuckets.overdue} tone="danger" />
-              <ReminderCard title="Due Soon" count={billReminderBuckets.dueSoon} tone="warn" />
-              <ReminderCard title="Due This Week" count={billReminderBuckets.dueThisWeek} tone="ok" />
-            </div>
-          </BlockCard>
-
-          <BlockCard title="Weekly Summary" button="Open" onClick={() => undefined}>
-            <div className="grid gap-4 md:grid-cols-2">
-              <InfoMini title="Total Spent This Week" value={`$${totalWeeklySpent.toFixed(2)}`} sub="Bills, debt, and expenses this week" className="text-[#f5b1b1]" />
-              <InfoMini title="Top Category" value={topWeeklyCategory ? `${topWeeklyCategory[0]}` : "N/A"} sub={topWeeklyCategory ? `$${topWeeklyCategory[1].toFixed(2)}` : "Add spending to generate a top category"} className="text-[#f5e4a3]" />
-            </div>
-            <div className="mt-4 space-y-3">
-              {Object.keys(weeklyCategoryTotals).length === 0 ? (
-                <Empty text="No weekly spending yet. Add spending this week to generate a summary." />
+            <BlockCard title="Transaction History" button="Open" onClick={() => undefined}>
+              {transactions.length === 0 ? (
+                <Empty text="No transactions yet. Add income, expenses, bills, or debt to start your history." />
               ) : (
-                Object.entries(weeklyCategoryTotals).map(([name, amount]) => (
-                  <div key={name} className="flex items-center justify-between rounded-xl border border-[#2a2a2f] bg-[#111216] px-4 py-3 text-sm md:text-base">
-                    <span>{name}</span>
-                    <span className="font-semibold text-[#f5e4a3]">${amount.toFixed(2)}</span>
+                transactions.slice(0, 10).map((tx) => (
+                  <div key={tx.id} className="flex flex-col gap-3 rounded-2xl border border-[#2a2a2f] bg-[#111216] p-5 md:flex-row md:items-center md:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-lg font-bold md:text-xl">{getTransactionLabel(tx.type)}</p>
+                      <p className="mt-1 break-words text-sm text-slate-400 md:text-base">{tx.note}</p>
+                      <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-[#d4af37]">{tx.category || categorizeSpending(tx.note, tx.type)}</p>
+                      <p className="mt-1 text-xs text-slate-500 md:text-sm">{formatMilitaryDate(tx.createdAt)}</p>
+                    </div>
+                    <div className={`text-xl font-extrabold md:text-2xl ${getTransactionColor(tx.type)}`}>
+                      {tx.type === "income" ? "+" : "-"}${tx.amount.toFixed(2)}
+                    </div>
                   </div>
                 ))
               )}
-            </div>
-          </BlockCard>
-
-          <BlockCard title="Spending Insights" button="Open" onClick={() => undefined}>
-            <div className="space-y-3">
-              {spendingInsights.map((insight) => (
-                <div key={insight} className="rounded-xl border border-[#2a2a2f] bg-[#111216] px-4 py-3 text-sm leading-6 text-slate-300 md:text-base">
-                  {insight}
-                </div>
-              ))}
-            </div>
-          </BlockCard>
-        </section>
-
-        <section className="mb-8 grid gap-6 lg:grid-cols-2">
-          <BlockCard title="Category Limits" button="Open" onClick={() => undefined}>
-            <div className="space-y-3">
-              {categoryLimitRows.map((row) => (
-                <div key={row.name} className="rounded-xl border border-[#2a2a2f] bg-[#111216] p-4">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="text-base font-semibold text-white">{row.name}</p>
-                      <p className="text-sm text-slate-400">Weekly limit: ${row.limit.toFixed(2)}</p>
-                    </div>
-                    <div className={`text-sm font-semibold ${row.isOver ? "text-[#f5b1b1]" : "text-[#f5e4a3]"}`}>
-                      {row.isOver ? `Over by $${(row.spent - row.limit).toFixed(2)}` : `$${row.remaining.toFixed(2)} left`}
-                    </div>
-                  </div>
-                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#23242b]">
-                    <div className={`h-full ${row.isOver ? "bg-[#c25757]" : "bg-[#d4af37]"}`} style={{ width: `${Math.min(100, (row.spent / row.limit) * 100)}%` }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </BlockCard>
-
-          <BlockCard title="Free Version Polish" button="Open" onClick={() => undefined}>
-            <div className="space-y-3 text-sm leading-6 text-slate-300 md:text-base">
-              <div className="rounded-xl border border-[#2a2a2f] bg-[#111216] px-4 py-3">Manual budgeting is active and fully usable right now.</div>
-              <div className="rounded-xl border border-[#2a2a2f] bg-[#111216] px-4 py-3">Weekly summary is active and updates from your transaction history.</div>
-              <div className="rounded-xl border border-[#2a2a2f] bg-[#111216] px-4 py-3">Savings ladder and next target are active.</div>
-              <div className="rounded-xl border border-[#2a2a2f] bg-[#111216] px-4 py-3">Can I Buy This now gives yes, careful, and no answers.</div>
-            </div>
-          </BlockCard>
-        </section>
-
-        <section className="mb-8 grid gap-6 lg:grid-cols-2">
-          <BlockCard title="Upcoming Bills" button="Add Bill" onClick={() => setShowBill(true)}>
-            {upcomingBills.length === 0 ? (
-              <Empty text="No upcoming bills yet." />
-            ) : (
-              upcomingBills.map((item) => (
-                <UpcomingItem
-                  key={item.id}
-                  name={item.name}
-                  date={formatMilitaryDate(item.effectiveDueDateRaw)}
-                  amount={`$${Number(item.amount || 0).toFixed(2)}`}
-                  meta={`${item.recurring ? "Recurring" : "One-Time"} • ${item.paidForCurrentCycle ? "Paid" : "Unpaid"}`}
-                  paid={item.paidForCurrentCycle}
-                />
-              ))
-            )}
-          </BlockCard>
-
-          <BlockCard title="Upcoming Debt Payments" button="Add Debt" onClick={() => setShowDebt(true)}>
-            {upcomingDebts.length === 0 ? (
-              <Empty text="No upcoming debt payments yet." />
-            ) : (
-              upcomingDebts.map((item) => (
-                <UpcomingItem
-                  key={item.id}
-                  name={item.name}
-                  date={formatMilitaryDate(item.effectiveDueDateRaw)}
-                  amount={`$${Number(item.minimumPayment || item.amount || 0).toFixed(2)}`}
-                  meta={`${item.recurring ? "Recurring minimum payment" : "One-Time"} • ${item.paidForCurrentCycle ? "Paid" : "Unpaid"}`}
-                  paid={item.paidForCurrentCycle}
-                />
-              ))
-            )}
-          </BlockCard>
-        </section>
-
-        <section className="mb-8 overflow-hidden rounded-2xl border border-[#2a2a2f] bg-[#17181d]">
-          <div className="flex flex-col gap-6 bg-[#111216] px-6 py-5 md:flex-row md:items-center md:justify-between">
-            <h2 className="text-3xl font-extrabold text-[#f5e4a3] md:text-4xl">Vault</h2>
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-              <MiniAction text="Can I Buy This" onClick={() => setShowBuy(true)} />
-              <MiniAction text="Bills" onClick={() => setShowBill(true)} />
-              <MiniAction text="Debt" onClick={() => setShowDebt(true)} />
-              <MiniAction text="Add" onClick={() => setShowAdd(true)} />
-            </div>
-          </div>
-
-          <div className="px-6 py-3">
-            <RowLine title="Guest Vault" subtitle="Total balance" amount={`$${totalBalance.toFixed(2)}`} amountClass="text-[#d4af37]" />
-            <RowLine title="Bills" subtitle="Priority item 1 after balance" amount={`-$${billsTotal.toFixed(2)}`} amountClass="text-[#c59a3d]" />
-            <RowLine title="Debt" subtitle="Priority item 2 after bills" amount={`-$${debtTotal.toFixed(2)}`} amountClass="text-[#c25757]" />
-            <RowLine title="Building Savings" subtitle="Priority item 3 before flexible spending" amount={`$${savingsContribution.toFixed(2)}`} amountClass="text-[#9ad6b2]" />
-            <RowLine title="Safe to Spend" subtitle="Flexible money after priorities and still leaves outing room" amount={`$${safeToSpend.toFixed(2)}`} amountClass="text-[#f5e4a3]" />
-          </div>
-        </section>
-
-        <BlockCard title="Bills List" button="Add Bill" onClick={() => setShowBill(true)}>
-          {billViews.length === 0 ? (
-            <Empty text="No bills yet. Add your first bill like rent, phone, or internet." />
-          ) : (
-            billViews.map((item) => (
-              <ManageItem
-                key={item.id}
-                name={item.name}
-                amount={`$${Number(item.amount || 0).toFixed(2)}`}
-                lineTwo={`Due: ${formatMilitaryDate(item.effectiveDueDateRaw)}`}
-                lineThree={`${item.recurring ? "Recurring" : "One-Time"} • ${item.paidForCurrentCycle ? "Paid" : "Unpaid"}`}
-                amountClass={item.paidForCurrentCycle ? "text-slate-500" : "text-[#c59a3d]"}
-                primaryLabel={item.paidForCurrentCycle ? "Paid" : "Mark Paid"}
-                primaryClass={item.paidForCurrentCycle ? "border-[#2d6a4f] text-[#b7e4c7] hover:bg-[#183a2b]" : "border-[#d4af37] text-[#f5e4a3] hover:bg-[#23242b]"}
-                onPrimary={() => toggleBillPaid(item)}
-                onRemove={() => removeBill(item)}
-              />
-            ))
-          )}
-        </BlockCard>
-
-        <div className="mt-8" />
-
-        <BlockCard title="Debt List" button="Add Debt" onClick={() => setShowDebt(true)}>
-          {debtViews.length === 0 ? (
-            <Empty text="No debt yet. Add your first debt like credit card, personal loan, or car note." />
-          ) : (
-            debtViews.map((item) => (
-              <ManageItem
-                key={item.id}
-                name={item.name}
-                amount={`$${Number(item.amount || 0).toFixed(2)}`}
-                lineTwo={`Minimum Payment: $${Number(item.minimumPayment || 0).toFixed(2)}`}
-                lineThree={`Due: ${formatMilitaryDate(item.effectiveDueDateRaw)} • ${item.recurring ? "Recurring" : "One-Time"} • ${item.paidForCurrentCycle ? "Paid" : "Unpaid"}`}
-                amountClass={item.paidForCurrentCycle ? "text-slate-500" : "text-[#ff9f9f]"}
-                primaryLabel={item.paidForCurrentCycle ? "Paid" : "Mark Paid"}
-                primaryClass={item.paidForCurrentCycle ? "border-[#2d6a4f] text-[#b7e4c7] hover:bg-[#183a2b]" : "border-[#d4af37] text-[#f5e4a3] hover:bg-[#23242b]"}
-                onPrimary={() => toggleDebtPaid(item)}
-                onRemove={() => removeDebt(item)}
-              />
-            ))
-          )}
-        </BlockCard>
-
-        <div className="mt-8" />
-
-        <BlockCard title="Transaction History" button="Open" onClick={() => undefined}>
-          {transactions.length === 0 ? (
-            <Empty text="No transactions yet. Add income, expenses, bills, or debt to start your history." />
-          ) : (
-            transactions.slice(0, 10).map((tx) => (
-              <div key={tx.id} className="flex flex-col gap-3 rounded-2xl border border-[#2a2a2f] bg-[#111216] p-5 md:flex-row md:items-center md:justify-between">
-                <div className="min-w-0">
-                  <p className="text-lg font-bold md:text-xl">{getTransactionLabel(tx.type)}</p>
-                  <p className="mt-1 break-words text-sm text-slate-400 md:text-base">{tx.note}</p>
-                  <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-[#d4af37]">{tx.category || categorizeSpending(tx.note, tx.type)}</p>
-                  <p className="mt-1 text-xs text-slate-500 md:text-sm">{formatMilitaryDate(tx.createdAt)}</p>
-                </div>
-                <div className={`text-xl font-extrabold md:text-2xl ${getTransactionColor(tx.type)}`}>
-                  {tx.type === "income" ? "+" : "-"}${tx.amount.toFixed(2)}
+            </BlockCard>
+          </>
+        ) : activeTab === "insights" ? (
+          <>
+            <section className="mb-8 rounded-2xl border border-[#2a2a2f] bg-[#17181d] p-6 shadow-sm">
+              <div className="mb-5 flex items-center justify-between">
+                <h2 className="text-2xl font-extrabold md:text-3xl">Savings Ladder</h2>
+                <div className="rounded-xl border border-[#2a2a2f] bg-[#111216] px-4 py-2 text-sm text-slate-400">
+                  Tracked amount: <span className="font-bold text-[#f5e4a3]">${savingsProgressAmount.toFixed(2)}</span>
                 </div>
               </div>
-            ))
-          )}
-        </BlockCard>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                {savingsLevels.map((level) => (
+                  <div key={level.name} className="rounded-2xl border border-[#2a2a2f] bg-[#111216] p-5">
+                    <p className="text-xl font-bold text-white">{level.name}</p>
+                    <p className="mt-2 text-sm font-semibold text-[#d4af37]">Target: ${level.min.toFixed(2)}</p>
+                    <ul className="mt-4 space-y-2 text-sm leading-6 text-slate-300">
+                      {level.bullets.map((point) => (
+                        <li key={point}>• {point}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="mb-8 grid gap-6 lg:grid-cols-2">
+              <BlockCard title="Weekly Summary" button="Open" onClick={() => undefined}>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <InfoMini title="Total Spent This Week" value={`$${totalWeeklySpent.toFixed(2)}`} sub="Bills, debt, and expenses this week" className="text-[#f5b1b1]" />
+                  <InfoMini title="Top Category" value={topWeeklyCategory ? `${topWeeklyCategory[0]}` : "N/A"} sub={topWeeklyCategory ? `$${topWeeklyCategory[1].toFixed(2)}` : "Add spending to generate a top category"} className="text-[#f5e4a3]" />
+                </div>
+                <div className="mt-4 space-y-3">
+                  {Object.keys(weeklyCategoryTotals).length === 0 ? (
+                    <Empty text="No weekly spending yet. Add spending this week to generate a summary." />
+                  ) : (
+                    Object.entries(weeklyCategoryTotals).map(([name, amount]) => (
+                      <div key={name} className="flex items-center justify-between rounded-xl border border-[#2a2a2f] bg-[#111216] px-4 py-3 text-sm md:text-base">
+                        <span>{name}</span>
+                        <span className="font-semibold text-[#f5e4a3]">${amount.toFixed(2)}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </BlockCard>
+
+              <BlockCard title="Spending Insights" button="Open" onClick={() => undefined}>
+                <div className="space-y-3">
+                  {spendingInsights.map((insight) => (
+                    <div key={insight} className="rounded-xl border border-[#2a2a2f] bg-[#111216] px-4 py-3 text-sm leading-6 text-slate-300 md:text-base">
+                      {insight}
+                    </div>
+                  ))}
+                </div>
+              </BlockCard>
+            </section>
+          </>
+        ) : (
+          <>
+            <section className="mb-8 grid gap-6 lg:grid-cols-2">
+              <BlockCard title="Upcoming Bills" button="Add Bill" onClick={() => setShowBill(true)}>
+                {upcomingBills.length === 0 ? (
+                  <Empty text="No upcoming bills yet." />
+                ) : (
+                  upcomingBills.map((item) => (
+                    <UpcomingItem
+                      key={item.id}
+                      name={item.name}
+                      date={formatMilitaryDate(item.effectiveDueDateRaw)}
+                      amount={`$${Number(item.amount || 0).toFixed(2)}`}
+                      meta={`${getCadenceLabel(item.paymentCadence, item.recurring)} • ${item.paidForCurrentCycle ? "Paid" : "Unpaid"}`}
+                      paid={item.paidForCurrentCycle}
+                    />
+                  ))
+                )}
+              </BlockCard>
+
+              <BlockCard title="Upcoming Debt Payments" button="Add Debt" onClick={() => setShowDebt(true)}>
+                {upcomingDebts.length === 0 ? (
+                  <Empty text="No upcoming debt payments yet." />
+                ) : (
+                  upcomingDebts.map((item) => (
+                    <UpcomingItem
+                      key={item.id}
+                      name={item.name}
+                      date={formatMilitaryDate(item.effectiveDueDateRaw)}
+                      amount={`$${Number(item.minimumPayment || item.amount || 0).toFixed(2)}`}
+                      meta={`${getCadenceLabel(item.paymentCadence, item.recurring)} • ${item.paidForCurrentCycle ? "Paid" : "Unpaid"}`}
+                      paid={item.paidForCurrentCycle}
+                    />
+                  ))
+                )}
+              </BlockCard>
+            </section>
+
+            <BlockCard title="Bills List" button="Add Bill" onClick={() => setShowBill(true)}>
+              {billViews.length === 0 ? (
+                <Empty text="No bills yet. Add your first bill like rent, phone, or internet." />
+              ) : (
+                billViews.map((item) => (
+                  <ManageItem
+                    key={item.id}
+                    name={item.name}
+                    amount={`$${Number(item.amount || 0).toFixed(2)}`}
+                    lineTwo={`Next Payment: ${formatMilitaryDate(item.effectiveDueDateRaw)}`}
+                    lineThree={`${getCadenceLabel(item.paymentCadence, item.recurring)} • ${item.paidForCurrentCycle ? "Paid" : "Unpaid"}`}
+                    amountClass={item.paidForCurrentCycle ? "text-slate-500" : "text-[#c59a3d]"}
+                    primaryLabel={item.paidForCurrentCycle ? "Paid" : "Mark Paid"}
+                    primaryClass={item.paidForCurrentCycle ? "border-[#2d6a4f] text-[#b7e4c7] hover:bg-[#183a2b]" : "border-[#d4af37] text-[#f5e4a3] hover:bg-[#23242b]"}
+                    onPrimary={() => toggleBillPaid(item)}
+                    onRemove={() => removeBill(item)}
+                  />
+                ))
+              )}
+            </BlockCard>
+
+            <div className="mt-8" />
+
+            <BlockCard title="Debt List" button="Add Debt" onClick={() => setShowDebt(true)}>
+              {debtViews.length === 0 ? (
+                <Empty text="No debt yet. Add your first debt like credit card, personal loan, or car note." />
+              ) : (
+                debtViews.map((item) => (
+                  <ManageItem
+                    key={item.id}
+                    name={item.name}
+                    amount={`$${Number(item.amount || 0).toFixed(2)}`}
+                    lineTwo={`Minimum Payment: $${Number(item.minimumPayment || 0).toFixed(2)}`}
+                    lineThree={`Next Payment: ${formatMilitaryDate(item.effectiveDueDateRaw)} • ${getCadenceLabel(item.paymentCadence, item.recurring)} • ${item.paidForCurrentCycle ? "Paid" : "Unpaid"}`}
+                    amountClass={item.paidForCurrentCycle ? "text-slate-500" : "text-[#ff9f9f]"}
+                    primaryLabel={item.paidForCurrentCycle ? "Paid" : "Mark Paid"}
+                    primaryClass={item.paidForCurrentCycle ? "border-[#2d6a4f] text-[#b7e4c7] hover:bg-[#183a2b]" : "border-[#d4af37] text-[#f5e4a3] hover:bg-[#23242b]"}
+                    onPrimary={() => toggleDebtPaid(item)}
+                    onRemove={() => removeDebt(item)}
+                  />
+                ))
+              )}
+            </BlockCard>
+          </>
+        )}
       </section>
 
       {showAdd && (
@@ -1296,35 +1401,39 @@ Last Payday: ${formatMilitaryDate(lastPayday)}`}
       )}
 
       {showBill && (
-        <Modal title="Add Bill" subtitle="Add a bill with exact due date and recurring status.">
+        <Modal title="Add Bill" subtitle="Add a bill with payment amount, last payment date, and payment cadence.">
           <label className="mt-4 block text-sm font-semibold text-slate-300">Bill Name</label>
           <input value={billName} onChange={(e) => setBillName(e.target.value)} type="text" placeholder="Example: Rent" className={inputClass} />
-          <label className="mt-4 block text-sm font-semibold text-slate-300">Amount</label>
-          <input value={billAmount} onChange={(e) => setBillAmount(e.target.value)} type="number" placeholder="Enter amount" className={inputClass} />
-          <label className="mt-4 block text-sm font-semibold text-slate-300">Due Date</label>
-          <input value={billDueDate} onChange={(e) => setBillDueDate(e.target.value)} type="date" className={inputClass} />
-          <div className="mt-4 flex items-center justify-between rounded-xl border border-[#3a3a42] bg-[#111216] px-4 py-3">
-            <span className="text-sm font-semibold text-slate-300">Recurring</span>
-            <input checked={billRecurring} onChange={(e) => setBillRecurring(e.target.checked)} type="checkbox" className="h-4 w-4" />
-          </div>
+          <label className="mt-4 block text-sm font-semibold text-slate-300">Amount Due Each Payment</label>
+          <input value={billAmount} onChange={(e) => setBillAmount(e.target.value)} type="number" placeholder="Enter amount due each payment" className={inputClass} />
+          <label className="mt-4 block text-sm font-semibold text-slate-300">Last Payment Date</label>
+          <input value={billLastPaymentDate} onChange={(e) => setBillLastPaymentDate(e.target.value)} type="date" className={inputClass} />
+          <label className="mt-4 block text-sm font-semibold text-slate-300">Payment Cadence</label>
+          <select value={billPaymentCadence} onChange={(e) => setBillPaymentCadence(e.target.value as PaymentCadence)} className={inputClass}>
+            <option value="monthly">Monthly</option>
+            <option value="biweekly">Biweekly</option>
+            <option value="one_time">One-Time</option>
+          </select>
           <ModalActions saving={saving} saveText="Save Bill" onCancel={() => setShowBill(false)} onSave={handleAddBill} />
         </Modal>
       )}
 
       {showDebt && (
-        <Modal title="Add Debt" subtitle="Add debt balance, minimum payment, exact due date, and recurring status.">
+        <Modal title="Add Debt" subtitle="Add debt balance, minimum payment, last payment date, and cadence.">
           <label className="mt-4 block text-sm font-semibold text-slate-300">Debt Name</label>
           <input value={debtName} onChange={(e) => setDebtName(e.target.value)} type="text" placeholder="Example: Credit Card" className={inputClass} />
           <label className="mt-4 block text-sm font-semibold text-slate-300">Debt Balance</label>
           <input value={debtAmount} onChange={(e) => setDebtAmount(e.target.value)} type="number" placeholder="Enter total debt balance" className={inputClass} />
-          <label className="mt-4 block text-sm font-semibold text-slate-300">Minimum Payment</label>
+          <label className="mt-4 block text-sm font-semibold text-slate-300">Minimum Payment Due Each Cycle</label>
           <input value={debtMinimumPayment} onChange={(e) => setDebtMinimumPayment(e.target.value)} type="number" placeholder="Enter minimum payment" className={inputClass} />
-          <label className="mt-4 block text-sm font-semibold text-slate-300">Due Date</label>
-          <input value={debtDueDate} onChange={(e) => setDebtDueDate(e.target.value)} type="date" className={inputClass} />
-          <div className="mt-4 flex items-center justify-between rounded-xl border border-[#3a3a42] bg-[#111216] px-4 py-3">
-            <span className="text-sm font-semibold text-slate-300">Recurring</span>
-            <input checked={debtRecurring} onChange={(e) => setDebtRecurring(e.target.checked)} type="checkbox" className="h-4 w-4" />
-          </div>
+          <label className="mt-4 block text-sm font-semibold text-slate-300">Last Payment Date</label>
+          <input value={debtLastPaymentDate} onChange={(e) => setDebtLastPaymentDate(e.target.value)} type="date" className={inputClass} />
+          <label className="mt-4 block text-sm font-semibold text-slate-300">Payment Cadence</label>
+          <select value={debtPaymentCadence} onChange={(e) => setDebtPaymentCadence(e.target.value as PaymentCadence)} className={inputClass}>
+            <option value="monthly">Monthly</option>
+            <option value="biweekly">Biweekly</option>
+            <option value="one_time">One-Time</option>
+          </select>
           <ModalActions saving={saving} saveText="Save Debt" onCancel={() => setShowDebt(false)} onSave={handleAddDebt} />
         </Modal>
       )}
@@ -1701,12 +1810,30 @@ function getPayCycleLabel(value: PayCycleType) {
   return "Not set";
 }
 
-function getRolledMonthlyDueDate(dueDate?: string) {
-  if (!dueDate) return null;
-  let date = new Date(`${dueDate}T12:00:00`);
+
+function getNextScheduledDate(anchorDate?: string, paymentCadence?: PaymentCadence, recurring?: boolean, legacyDueDate?: string) {
+  const sourceDate = anchorDate || legacyDueDate;
+  if (!sourceDate) return null;
+  let date = new Date(`${sourceDate}T12:00:00`);
   if (Number.isNaN(date.getTime())) return null;
+
+  const cadence: PaymentCadence =
+    paymentCadence || (recurring === false ? "one_time" : "monthly");
+
   const today = new Date();
   const now = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 12);
+
+  if (cadence === "one_time") {
+    return date;
+  }
+
+  if (cadence === "biweekly") {
+    while (date < now) {
+      date = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 14, 12);
+    }
+    return date;
+  }
+
   while (date < now) {
     date = new Date(date.getFullYear(), date.getMonth() + 1, date.getDate(), 12);
   }
@@ -1714,45 +1841,52 @@ function getRolledMonthlyDueDate(dueDate?: string) {
 }
 
 function isPaidForCurrentCycle(
+  paymentCadence: PaymentCadence | undefined,
   recurring: boolean | undefined,
   paid: boolean | undefined,
   paidDate: string | undefined,
   effectiveDueDate: Date | null
 ) {
   if (!paid) return false;
-  if (!recurring) return true;
+  const cadence: PaymentCadence = paymentCadence || (recurring === false ? "one_time" : "monthly");
+  if (cadence === "one_time") return true;
   if (!paidDate || !effectiveDueDate) return false;
   const paidOn = new Date(`${paidDate}T12:00:00`);
   if (Number.isNaN(paidOn.getTime())) return false;
+
+  if (cadence === "biweekly") {
+    const diffDays = Math.abs(Math.round((effectiveDueDate.getTime() - paidOn.getTime()) / 86400000));
+    return diffDays <= 14;
+  }
+
   return paidOn.getFullYear() === effectiveDueDate.getFullYear() && paidOn.getMonth() === effectiveDueDate.getMonth();
 }
 
 function buildBillView(item: BillItem): BillView {
-  const effectiveDueDateRaw = item.recurring
-    ? getRolledMonthlyDueDate(item.dueDate)
-    : item.dueDate
-    ? new Date(`${item.dueDate}T12:00:00`)
-    : null;
+  const effectiveDueDateRaw = getNextScheduledDate(item.lastPaymentDate, item.paymentCadence, item.recurring, item.dueDate);
 
   return {
     ...item,
     effectiveDueDateRaw,
-    paidForCurrentCycle: isPaidForCurrentCycle(item.recurring, item.paid, item.paidDate, effectiveDueDateRaw),
+    paidForCurrentCycle: isPaidForCurrentCycle(item.paymentCadence, item.recurring, item.paid, item.paidDate, effectiveDueDateRaw),
   };
 }
 
 function buildDebtView(item: DebtItem): DebtView {
-  const effectiveDueDateRaw = item.recurring
-    ? getRolledMonthlyDueDate(item.dueDate)
-    : item.dueDate
-    ? new Date(`${item.dueDate}T12:00:00`)
-    : null;
+  const effectiveDueDateRaw = getNextScheduledDate(item.lastPaymentDate, item.paymentCadence, item.recurring, item.dueDate);
 
   return {
     ...item,
     effectiveDueDateRaw,
-    paidForCurrentCycle: isPaidForCurrentCycle(item.recurring, item.paid, item.paidDate, effectiveDueDateRaw),
+    paidForCurrentCycle: isPaidForCurrentCycle(item.paymentCadence, item.recurring, item.paid, item.paidDate, effectiveDueDateRaw),
   };
+}
+
+function getCadenceLabel(paymentCadence?: PaymentCadence, recurring?: boolean) {
+  const cadence: PaymentCadence = paymentCadence || (recurring === false ? "one_time" : "monthly");
+  if (cadence === "biweekly") return "Biweekly";
+  if (cadence === "one_time") return "One-Time";
+  return "Monthly";
 }
 
 function getPayCycleInfo(payCycle: PayCycleType, lastPayday: string) {
