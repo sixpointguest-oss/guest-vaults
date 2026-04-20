@@ -201,6 +201,7 @@ export default function HomePage() {
   const [payCycleInput, setPayCycleInput] = useState<PayCycleType>("");
   const [lastPaydayInput, setLastPaydayInput] = useState("");
   const [paydayAmountInput, setPaydayAmountInput] = useState("");
+  const [profileSavingsInput, setProfileSavingsInput] = useState("");
 
   const [buyAmount, setBuyAmount] = useState("");
   const [buyNote, setBuyNote] = useState("");
@@ -450,6 +451,7 @@ const estimatedCyclesToNextLevel =
         setPayCycleInput(payCycle);
         setLastPaydayInput(lastPayday);
         setPaydayAmountInput(paydayAmount ? String(paydayAmount) : "");
+        setProfileSavingsInput(String(savings || 0));
         setShowProfile(true);
       },
     },
@@ -638,12 +640,17 @@ const momentumMessage = useMemo(() => {
   async function handleSaveProfile() {
     if (!user) return;
     const paydayAmountNumber = Number(paydayAmountInput);
+    const savingsNumber = Number(profileSavingsInput || 0);
     if (!profileNameInput.trim() || !profileTypeInput || !payCycleInput || !lastPaydayInput) {
       alert("Fill out all profile fields.");
       return;
     }
     if (!paydayAmountNumber || paydayAmountNumber <= 0) {
       alert("Enter a valid payday amount.");
+      return;
+    }
+    if (Number.isNaN(savingsNumber) || savingsNumber < 0) {
+      alert("Enter a valid savings amount.");
       return;
     }
 
@@ -655,12 +662,14 @@ const momentumMessage = useMemo(() => {
         payCycle: payCycleInput,
         lastPayday: lastPaydayInput,
         paydayAmount: paydayAmountNumber,
+        savings: savingsNumber,
       });
       setFullName(profileNameInput.trim());
       setProfileType(profileTypeInput);
       setPayCycle(payCycleInput);
       setLastPayday(lastPaydayInput);
       setPaydayAmount(paydayAmountNumber);
+      setSavings(savingsNumber);
       setCommandMessage("Profile settings updated.");
       setShowProfile(false);
     } finally {
@@ -1120,6 +1129,7 @@ Last Payday: ${formatMilitaryDate(lastPayday)}`}
                       setPayCycleInput(payCycle);
                       setLastPaydayInput(lastPayday);
                       setPaydayAmountInput(paydayAmount ? String(paydayAmount) : "");
+                      setProfileSavingsInput(String(savings || 0));
                       setShowProfile(true);
                     }}
                     className="mt-5 text-base font-semibold text-[#f5e4a3] hover:underline"
@@ -1494,7 +1504,7 @@ function BudgetCard({
   return (
     <div className="min-w-0 rounded-2xl border border-[#2a2a2f] bg-[#111216] p-4">
       <p className="text-sm font-semibold leading-5 text-slate-400 md:text-base">{title}</p>
-      <p className={`mt-3 truncate font-extrabold leading-tight ${amountTextClass(amount)} ${amountClass}`} title={amount}>
+      <p className={`mt-3 break-words text-[1.55rem] font-extrabold leading-none md:text-[1.8rem] xl:text-[2rem] ${amountClass}`} title={amount}>
         {amount}
       </p>
       <p className="mt-2 text-base font-semibold text-slate-400 md:text-lg">{percent}</p>
@@ -1516,7 +1526,7 @@ function InfoMini({
   return (
     <div className="rounded-2xl border border-[#2a2a2f] bg-[#111216] p-5">
       <p className="text-base font-semibold text-slate-400">{title}</p>
-      <p className={`mt-1 font-extrabold ${amountTextClass(value)} ${className}`}>{value}</p>
+      <p className={`mt-1 break-words text-[1.55rem] font-extrabold leading-none md:text-[1.8rem] ${className}`}>{value}</p>
       <p className="mt-2 text-sm text-slate-500 md:text-base">{sub}</p>
     </div>
   );
