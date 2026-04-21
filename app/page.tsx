@@ -1018,60 +1018,37 @@ if (loading) {
 
   return (
     <main className="min-h-screen bg-[#0d0d0f] text-[#f5f5f5]">
-      <header className="border-b border-[#2a2a2f] bg-[#111216]">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5">
-          <div className="flex items-center gap-5">
-            <div className="flex items-center gap-3">
-              <Image src="/guest-vaults-logo.jpg" alt="Guest Vaults logo" width={48} height={48} className="h-12 w-12 rounded-md object-contain" />
-              <span className="text-lg font-bold md:text-xl">Guest Vaults</span>
-              <button onClick={() => setSidebarOpen(!sidebarOpen)} className="ml-3 text-xl">☰</button>
-            </div>
-            <div className="hidden md:flex items-center gap-2">
-              {[
-                { key: "home", label: "Home" },
-                { key: "insights", label: "Growth Hub" },
-                { key: "payments", label: "Payments Hub" },
-              ].map((tab) => (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveTab(tab.key as "home" | "insights" | "payments")}
-                  className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                    activeTab === tab.key
-                      ? "border-[#d4af37] bg-[#2a2415] text-[#f5e4a3]"
-                      : "border-[#3a3a42] bg-[#1a1b20] text-slate-300 hover:bg-[#23242b]"
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
+      
+<header className="border-b border-[#2a2a2f] bg-[#111216]">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 md:px-6 md:py-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <button
+              onClick={() => setSidebarOpen((v) => !v)}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#d4af37] bg-[#1a1b20] text-xl font-bold text-[#f5e4a3] hover:bg-[#23242b]"
+              aria-label="Open menu"
+            >
+              ☰
+            </button>
+
+            <div className="flex min-w-0 items-center gap-3">
+              <Image
+                src="/guest-vaults-logo.jpg"
+                alt="Guest Vaults logo"
+                width={44}
+                height={44}
+                className="h-11 w-11 rounded-md object-contain"
+              />
+              <div className="min-w-0">
+                <p className="truncate text-base font-bold md:text-lg">Guest Vaults</p>
+                <p className="hidden text-xs text-slate-500 md:block">Budget with clarity and discipline</p>
+              </div>
             </div>
           </div>
-          <div className="relative flex items-center gap-3">
-            <button
-              onClick={() => {
-                setProfileNameInput(fullName);
-                setProfileTypeInput(profileType);
-                setPayCycleInput(payCycle);
-                setLastPaydayInput(lastPayday);
-                setPaydayAmountInput(paydayAmount ? String(paydayAmount) : "");
-                setShowProfile(true);
-              }}
-              className="rounded-full border border-[#d4af37] bg-[#1a1b20] px-4 py-2 font-semibold text-[#f5e4a3] hover:bg-[#23242b]"
-            >
-              Profile
-            </button>
-            <button
-              onClick={async () => {
-                await signOut(auth);
-                router.replace("/login");
-              }}
-              className="rounded-full border border-[#d4af37] bg-[#1a1b20] px-4 py-2 font-semibold text-[#f5e4a3] hover:bg-[#23242b]"
-            >
-              Log Out
-            </button>
+
+          <div className="relative flex shrink-0 items-center gap-2 md:gap-3">
             <button
               onClick={() => setShowNotifications((v) => !v)}
-              className="relative rounded-full border border-[#d4af37] bg-[#1a1b20] px-4 py-2 font-semibold text-[#f5e4a3] hover:bg-[#23242b]"
+              className="relative flex h-11 w-11 items-center justify-center rounded-xl border border-[#d4af37] bg-[#1a1b20] text-xl text-[#f5e4a3] hover:bg-[#23242b]"
               aria-label="Notifications"
             >
               🔔
@@ -1082,13 +1059,39 @@ if (loading) {
               ) : null}
             </button>
 
+            <div className="hidden items-center gap-3 md:flex">
+              <button
+                onClick={() => {
+                  setProfileNameInput(fullName);
+                  setProfileTypeInput(profileType);
+                  setPayCycleInput(payCycle);
+                  setLastPaydayInput(lastPayday);
+                  setPaydayAmountInput(paydayAmount ? String(paydayAmount) : "");
+                  setProfileSavingsInput(String(savings || 0));
+                  setShowProfile(true);
+                }}
+                className="rounded-full border border-[#d4af37] bg-[#1a1b20] px-4 py-2 font-semibold text-[#f5e4a3] hover:bg-[#23242b]"
+              >
+                Profile
+              </button>
+              <button
+                onClick={async () => {
+                  await signOut(auth);
+                  router.replace("/login");
+                }}
+                className="rounded-full border border-[#d4af37] bg-[#1a1b20] px-4 py-2 font-semibold text-[#f5e4a3] hover:bg-[#23242b]"
+              >
+                Log Out
+              </button>
+            </div>
+
             {showNotifications ? (
-              <div className="absolute right-0 top-14 z-40 w-[340px] rounded-2xl border border-[#2a2a2f] bg-[#17181d] p-4 shadow-2xl">
+              <div className="absolute right-0 top-14 z-40 w-[320px] max-w-[92vw] rounded-2xl border border-[#2a2a2f] bg-[#17181d] p-4 shadow-2xl">
                 <div className="mb-3 flex items-center justify-between">
                   <h3 className="text-lg font-bold text-white">Due Within 7 Days</h3>
                   <span className="text-sm text-slate-400">{notificationItems.length} item{notificationItems.length === 1 ? "" : "s"}</span>
                 </div>
-                <div className="space-y-3">
+                <div className="max-h-[65vh] space-y-3 overflow-y-auto">
                   {notificationItems.length === 0 ? (
                     <div className="rounded-xl border border-[#2a2a2f] bg-[#111216] p-4 text-sm text-slate-400">
                       No bills or debt payments due within the next week.
@@ -1115,33 +1118,77 @@ if (loading) {
             ) : null}
           </div>
         </div>
-      
-{sidebarOpen && (
-  <div className="fixed left-0 top-0 h-full w-64 bg-[#111216] border-r border-[#2a2a2f] p-4 z-50">
-    <button onClick={() => setSidebarOpen(false)} className="mb-4 text-white">Close</button>
-    <div className="space-y-3">
-      <button onClick={() => setActiveTab("home")} className="block w-full text-left">Home</button>
-      <button onClick={() => setActiveTab("insights")} className="block w-full text-left">Growth Hub</button>
-      <button onClick={() => setActiveTab("payments")} className="block w-full text-left">Payments Hub</button>
-    </div>
-  </div>
-)}
-</header>
+
+        {sidebarOpen ? (
+          <div className="border-t border-[#2a2a2f] bg-[#111216] md:hidden">
+            <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-4">
+              {[
+                { key: "home", label: "Home" },
+                { key: "insights", label: "Growth Hub" },
+                { key: "payments", label: "Payments Hub" },
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => {
+                    setActiveTab(tab.key as "home" | "insights" | "payments");
+                    setSidebarOpen(false);
+                  }}
+                  className={`rounded-xl border px-4 py-3 text-left text-sm font-semibold transition ${
+                    activeTab === tab.key
+                      ? "border-[#d4af37] bg-[#2a2415] text-[#f5e4a3]"
+                      : "border-[#3a3a42] bg-[#1a1b20] text-slate-300 hover:bg-[#23242b]"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+
+              <div className="mt-2 grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => {
+                    setProfileNameInput(fullName);
+                    setProfileTypeInput(profileType);
+                    setPayCycleInput(payCycle);
+                    setLastPaydayInput(lastPayday);
+                    setPaydayAmountInput(paydayAmount ? String(paydayAmount) : "");
+                    setProfileSavingsInput(String(savings || 0));
+                    setShowProfile(true);
+                    setSidebarOpen(false);
+                  }}
+                  className="rounded-xl border border-[#d4af37] bg-[#1a1b20] px-4 py-3 text-sm font-semibold text-[#f5e4a3] hover:bg-[#23242b]"
+                >
+                  Profile
+                </button>
+                <button
+                  onClick={async () => {
+                    setSidebarOpen(false);
+                    await signOut(auth);
+                    router.replace("/login");
+                  }}
+                  className="rounded-xl border border-[#d4af37] bg-[#1a1b20] px-4 py-3 text-sm font-semibold text-[#f5e4a3] hover:bg-[#23242b]"
+                >
+                  Log Out
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </header>
 
 
       <section className="mx-auto max-w-7xl px-6 py-10">
-        <div className="mb-8 grid gap-6 lg:grid-cols-[180px_1fr] lg:items-center">
-          <div className="flex justify-center lg:justify-start">
+        <div className="mb-6 grid gap-4 md:mb-8 md:gap-6 lg:grid-cols-[180px_1fr] lg:items-center">
+          <div className="hidden justify-center lg:flex lg:justify-start">
             <Image src="/guest-vaults-logo.jpg" alt="Guest Vaults logo" width={170} height={170} className="h-32 w-32 rounded-2xl object-contain md:h-40 md:w-40" />
           </div>
           <div className="min-w-0">
-            <h1 className="break-words text-3xl font-extrabold tracking-tight md:text-5xl">
+            <h1 className="break-words text-[2.1rem] font-extrabold leading-tight tracking-tight sm:text-4xl md:text-5xl">
               {getGreeting()}, <span className="text-[#d4af37]">{fullName?.trim() || "User"}</span>
             </h1>
-            <p className="mt-3 max-w-3xl text-base text-slate-400 md:text-lg">
+            <p className="mt-3 max-w-3xl text-[1rem] leading-7 text-slate-400 md:text-lg">
               {fullName?.trim() ? `Let's lock in your money today, ${fullName.trim()}.` : "Your budget, bills, debt, pay cycle, and bank connection all in one place."}
             </p>
-            <div className="mt-4 h-2 w-32 bg-[#d4af37]" />
+            <div className="mt-4 h-2 w-24 bg-[#d4af37] md:w-32" />
           </div>
         </div>
 
@@ -1151,7 +1198,7 @@ if (loading) {
               <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                 <div className="min-w-0">
                   <p className="text-sm font-semibold uppercase tracking-wide text-[#d4af37]">Main Insight</p>
-                  <h2 className="mt-2 text-2xl font-extrabold md:text-3xl">{mainInsight}</h2>
+                  <h2 className="mt-2 text-[1.85rem] font-extrabold leading-tight md:text-3xl">{mainInsight}</h2>
                   <p className="mt-3 text-sm leading-6 text-slate-400 md:text-base">{momentumMessage}</p>
                 </div>
                 <div className="rounded-xl border border-[#2a2a2f] bg-[#111216] px-4 py-3 text-right">
