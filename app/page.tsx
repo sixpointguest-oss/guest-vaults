@@ -1024,7 +1024,7 @@ if (loading) {
           <div className="flex min-w-0 items-center gap-3">
             <button
               onClick={() => setSidebarOpen((v) => !v)}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#d4af37] bg-[#1a1b20] text-xl font-bold text-[#f5e4a3] hover:bg-[#23242b]"
+              className="relative z-[110] flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#d4af37] bg-[#1a1b20] text-xl font-bold text-[#f5e4a3] hover:bg-[#23242b]" type="button"
               aria-label="Open menu"
             >
               ☰
@@ -1120,31 +1120,64 @@ if (loading) {
         </div>
 
         {sidebarOpen ? (
-          <div className="border-t border-[#2a2a2f] bg-[#111216] md:hidden">
-            <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-4">
-              {[
-                { key: "home", label: "Home" },
-                { key: "insights", label: "Growth Hub" },
-                { key: "payments", label: "Payments Hub" },
-              ].map((tab) => (
+          <div className="fixed inset-0 z-[100] md:hidden">
+            <button
+              type="button"
+              aria-label="Close menu backdrop"
+              onClick={() => setSidebarOpen(false)}
+              className="absolute inset-0 bg-black/60"
+            />
+            <div className="absolute left-0 top-0 h-full w-[84vw] max-w-[320px] border-r border-[#2a2a2f] bg-[#111216] p-4 shadow-2xl">
+              <div className="mb-5 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Image
+                    src="/guest-vaults-logo.jpg"
+                    alt="Guest Vaults logo"
+                    width={36}
+                    height={36}
+                    className="h-9 w-9 rounded-md object-contain"
+                  />
+                  <div>
+                    <p className="text-base font-bold text-white">Guest Vaults</p>
+                    <p className="text-xs text-slate-500">Menu</p>
+                  </div>
+                </div>
                 <button
-                  key={tab.key}
-                  onClick={() => {
-                    setActiveTab(tab.key as "home" | "insights" | "payments");
-                    setSidebarOpen(false);
-                  }}
-                  className={`rounded-xl border px-4 py-3 text-left text-sm font-semibold transition ${
-                    activeTab === tab.key
-                      ? "border-[#d4af37] bg-[#2a2415] text-[#f5e4a3]"
-                      : "border-[#3a3a42] bg-[#1a1b20] text-slate-300 hover:bg-[#23242b]"
-                  }`}
+                  type="button"
+                  onClick={() => setSidebarOpen(false)}
+                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#d4af37] bg-[#1a1b20] text-lg font-bold text-[#f5e4a3] hover:bg-[#23242b]"
                 >
-                  {tab.label}
+                  ✕
                 </button>
-              ))}
+              </div>
 
-              <div className="mt-2 grid grid-cols-2 gap-3">
+              <div className="space-y-3">
+                {[
+                  { key: "home", label: "Home" },
+                  { key: "insights", label: "Growth Hub" },
+                  { key: "payments", label: "Payments Hub" },
+                ].map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => {
+                      setActiveTab(tab.key as "home" | "insights" | "payments");
+                      setSidebarOpen(false);
+                    }}
+                    className={`block w-full rounded-xl border px-4 py-3 text-left text-sm font-semibold transition ${
+                      activeTab === tab.key
+                        ? "border-[#d4af37] bg-[#2a2415] text-[#f5e4a3]"
+                        : "border-[#3a3a42] bg-[#1a1b20] text-slate-300 hover:bg-[#23242b]"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="mt-5 grid grid-cols-2 gap-3">
                 <button
+                  type="button"
                   onClick={() => {
                     setProfileNameInput(fullName);
                     setProfileTypeInput(profileType);
@@ -1160,6 +1193,7 @@ if (loading) {
                   Profile
                 </button>
                 <button
+                  type="button"
                   onClick={async () => {
                     setSidebarOpen(false);
                     await signOut(auth);
