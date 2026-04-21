@@ -208,6 +208,13 @@ export default function HomePage() {
   const [buyResult, setBuyResult] = useState("");
   const [activeTab, setActiveTab] = useState<"home" | "insights" | "payments">("home");
   const [showNotifications, setShowNotifications] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [onboardingBills, setOnboardingBills] = useState([
+    { name: "", amount: "", lastPaymentDate: "", paymentCadence: "monthly" as PaymentCadence },
+  ]);
+  const [onboardingDebts, setOnboardingDebts] = useState([
+    { name: "", amount: "", minimumPayment: "", lastPaymentDate: "", paymentCadence: "monthly" as PaymentCadence },
+  ]);
 
   const [plaidLinkToken, setPlaidLinkToken] = useState("");
   const [plaidStatus, setPlaidStatus] = useState("Not connected");
@@ -294,6 +301,45 @@ export default function HomePage() {
       }
     },
   });
+
+
+  function addOnboardingBillRow() {
+    setOnboardingBills((prev) => [
+      ...prev,
+      { name: "", amount: "", lastPaymentDate: "", paymentCadence: "monthly" as PaymentCadence },
+    ]);
+  }
+
+  function removeOnboardingBillRow(index: number) {
+    setOnboardingBills((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== index)));
+  }
+
+  function updateOnboardingBillRow(
+    index: number,
+    field: "name" | "amount" | "lastPaymentDate" | "paymentCadence",
+    value: string
+  ) {
+    setOnboardingBills((prev) => prev.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
+  }
+
+  function addOnboardingDebtRow() {
+    setOnboardingDebts((prev) => [
+      ...prev,
+      { name: "", amount: "", minimumPayment: "", lastPaymentDate: "", paymentCadence: "monthly" as PaymentCadence },
+    ]);
+  }
+
+  function removeOnboardingDebtRow(index: number) {
+    setOnboardingDebts((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== index)));
+  }
+
+  function updateOnboardingDebtRow(
+    index: number,
+    field: "name" | "amount" | "minimumPayment" | "lastPaymentDate" | "paymentCadence",
+    value: string
+  ) {
+    setOnboardingDebts((prev) => prev.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
+  }
 
   async function loadBills(uid: string) {
     const snap = await getDocs(
@@ -460,14 +506,20 @@ const estimatedCyclesToNextLevel =
       description: "Add your first bill like rent, phone, internet, or insurance.",
       done: hasBills,
       actionLabel: hasBills ? "Done" : "Add Bill",
-      onClick: () => setShowBill(true),
+      onClick: () => {
+        const section = document.getElementById("start-here-setup");
+        section?.scrollIntoView({ behavior: "smooth" });
+      },
     },
     {
       title: "Add First Debt",
       description: "Add debt like a credit card, personal loan, or car payment.",
       done: hasDebt,
       actionLabel: hasDebt ? "Done" : "Add Debt",
-      onClick: () => setShowDebt(true),
+      onClick: () => {
+        const section = document.getElementById("start-here-setup");
+        section?.scrollIntoView({ behavior: "smooth" });
+      },
     },
     {
       title: "Review Safe to Spend",
@@ -636,6 +688,73 @@ const momentumMessage = useMemo(() => {
   return "Build momentum by logging bills, debt, and spending consistently.";
 }, [savingsProgressPercent, totalWeeklySpent, topWeeklyCategory]);
 
+
+
+  async function handleSaveOnboardingSetup() {
+    if (!user) return;
+
+    const validBills = onboardingBills.filter(
+      (row) => row.name.trim() && Number(row.amount) > 0 && row.lastPaymentDate
+    );
+    const validDebts = onboardingDebts.filter(
+      (row) =>
+        row.name.trim() &&
+        Number(row.amount) > 0 &&
+        Number(row.minimumPayment) > 0 &&
+        row.lastPaymentDate
+    );
+
+    if (validBills.length === 0 && validDebts.length === 0) {
+      alert("Add at least one valid bill or debt in onboarding.");
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      for (const row of validBills) {
+        const amount = Number(row.amount);
+        await addDoc(collection(db, "users", user.uid, "bills"), {
+          name: row.name.trim(),
+          amount,
+          lastPaymentDate: row.lastPaymentDate,
+          paymentCadence: row.paymentCadence,
+          paid: false,
+          paidDate: "",
+          createdAt: serverTimestamp(),
+        });
+        await addTransaction("bill", amount, `Added onboarding bill: ${row.name.trim()}`);
+      }
+
+      for (const row of validDebts) {
+        const amount = Number(row.amount);
+        const minimumPayment = Number(row.minimumPayment);
+        await addDoc(collection(db, "users", user.uid, "debts"), {
+          name: row.name.trim(),
+          amount,
+          minimumPayment,
+          lastPaymentDate: row.lastPaymentDate,
+          paymentCadence: row.paymentCadence,
+          paid: false,
+          paidDate: "",
+          createdAt: serverTimestamp(),
+        });
+        await addTransaction("debt", minimumPayment, `Added onboarding debt: ${row.name.trim()}`);
+      }
+
+      await loadBills(user.uid);
+      await loadDebts(user.uid);
+      await loadTransactions(user.uid);
+
+      setOnboardingBills([{ name: "", amount: "", lastPaymentDate: "", paymentCadence: "monthly" as PaymentCadence }]);
+      setOnboardingDebts([
+        { name: "", amount: "", minimumPayment: "", lastPaymentDate: "", paymentCadence: "monthly" as PaymentCadence },
+      ]);
+      setCommandMessage("Onboarding bills and debts saved.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function handleSaveProfile() {
     if (!user) return;
@@ -905,6 +1024,7 @@ if (loading) {
             <div className="flex items-center gap-3">
               <Image src="/guest-vaults-logo.jpg" alt="Guest Vaults logo" width={48} height={48} className="h-12 w-12 rounded-md object-contain" />
               <span className="text-lg font-bold md:text-xl">Guest Vaults</span>
+              <button onClick={() => setSidebarOpen(!sidebarOpen)} className="ml-3 text-xl">☰</button>
             </div>
             <div className="hidden md:flex items-center gap-2">
               {[
@@ -995,7 +1115,18 @@ if (loading) {
             ) : null}
           </div>
         </div>
-      </header>
+      
+{sidebarOpen && (
+  <div className="fixed left-0 top-0 h-full w-64 bg-[#111216] border-r border-[#2a2a2f] p-4 z-50">
+    <button onClick={() => setSidebarOpen(false)} className="mb-4 text-white">Close</button>
+    <div className="space-y-3">
+      <button onClick={() => setActiveTab("home")} className="block w-full text-left">Home</button>
+      <button onClick={() => setActiveTab("insights")} className="block w-full text-left">Growth Hub</button>
+      <button onClick={() => setActiveTab("payments")} className="block w-full text-left">Payments Hub</button>
+    </div>
+  </div>
+)}
+</header>
 
 
       <section className="mx-auto max-w-7xl px-6 py-10">
@@ -1031,13 +1162,147 @@ if (loading) {
             </section>
 
             {showStartHere ? (
-              <section className="mb-8 rounded-2xl border border-[#2a2a2f] bg-[#17181d] p-6 shadow-sm">
+              <section id="start-here-setup" className="mb-8 rounded-2xl border border-[#2a2a2f] bg-[#17181d] p-6 shadow-sm">
                 <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div>
-                    <h2 className="text-2xl font-extrabold md:text-3xl">Start Here</h2>
+                    
+<h2 className="text-2xl font-extrabold md:text-3xl">Start Here</h2>
                     <p className="mt-2 max-w-3xl text-base text-slate-400 md:text-lg">
                       Follow these steps to set up Guest Vaults the way a real user would.
                     </p>
+
+                    <div className="mt-6 grid gap-4 lg:grid-cols-2">
+                      <div className="rounded-2xl border border-[#2a2a2f] bg-[#111216] p-4">
+                        <div className="mb-3 flex items-center justify-between">
+                          <h3 className="text-lg font-bold text-white">Bills During Onboarding</h3>
+                          <button
+                            onClick={addOnboardingBillRow}
+                            className="rounded-lg border border-[#d4af37] px-3 py-2 text-xs font-semibold text-[#f5e4a3] hover:bg-[#23242b]"
+                          >
+                            + Add Bill
+                          </button>
+                        </div>
+                        <div className="space-y-3">
+                          {onboardingBills.map((row, index) => (
+                            <div key={`onboarding-bill-${index}`} className="rounded-xl border border-[#2a2a2f] bg-[#17181d] p-3">
+                              <div className="grid gap-3 md:grid-cols-2">
+                                <input
+                                  value={row.name}
+                                  onChange={(e) => updateOnboardingBillRow(index, "name", e.target.value)}
+                                  type="text"
+                                  placeholder="Bill name"
+                                  className={inputClass}
+                                />
+                                <input
+                                  value={row.amount}
+                                  onChange={(e) => updateOnboardingBillRow(index, "amount", e.target.value)}
+                                  type="number"
+                                  placeholder="Amount due each payment"
+                                  className={inputClass}
+                                />
+                                <input
+                                  value={row.lastPaymentDate}
+                                  onChange={(e) => updateOnboardingBillRow(index, "lastPaymentDate", e.target.value)}
+                                  type="date"
+                                  className={inputClass}
+                                />
+                                <select
+                                  value={row.paymentCadence}
+                                  onChange={(e) => updateOnboardingBillRow(index, "paymentCadence", e.target.value)}
+                                  className={inputClass}
+                                >
+                                  <option value="monthly">Monthly</option>
+                                  <option value="biweekly">Biweekly</option>
+                                  <option value="one_time">One-Time</option>
+                                </select>
+                              </div>
+                              {onboardingBills.length > 1 ? (
+                                <button
+                                  onClick={() => removeOnboardingBillRow(index)}
+                                  className="mt-3 rounded-lg border border-[#c25757] px-3 py-2 text-xs font-semibold text-[#f5b1b1] hover:bg-[#2a1717]"
+                                >
+                                  Remove Bill
+                                </button>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-[#2a2a2f] bg-[#111216] p-4">
+                        <div className="mb-3 flex items-center justify-between">
+                          <h3 className="text-lg font-bold text-white">Debts During Onboarding</h3>
+                          <button
+                            onClick={addOnboardingDebtRow}
+                            className="rounded-lg border border-[#d4af37] px-3 py-2 text-xs font-semibold text-[#f5e4a3] hover:bg-[#23242b]"
+                          >
+                            + Add Debt
+                          </button>
+                        </div>
+                        <div className="space-y-3">
+                          {onboardingDebts.map((row, index) => (
+                            <div key={`onboarding-debt-${index}`} className="rounded-xl border border-[#2a2a2f] bg-[#17181d] p-3">
+                              <div className="grid gap-3 md:grid-cols-2">
+                                <input
+                                  value={row.name}
+                                  onChange={(e) => updateOnboardingDebtRow(index, "name", e.target.value)}
+                                  type="text"
+                                  placeholder="Debt name"
+                                  className={inputClass}
+                                />
+                                <input
+                                  value={row.amount}
+                                  onChange={(e) => updateOnboardingDebtRow(index, "amount", e.target.value)}
+                                  type="number"
+                                  placeholder="Debt balance"
+                                  className={inputClass}
+                                />
+                                <input
+                                  value={row.minimumPayment}
+                                  onChange={(e) => updateOnboardingDebtRow(index, "minimumPayment", e.target.value)}
+                                  type="number"
+                                  placeholder="Minimum payment"
+                                  className={inputClass}
+                                />
+                                <input
+                                  value={row.lastPaymentDate}
+                                  onChange={(e) => updateOnboardingDebtRow(index, "lastPaymentDate", e.target.value)}
+                                  type="date"
+                                  className={inputClass}
+                                />
+                                <select
+                                  value={row.paymentCadence}
+                                  onChange={(e) => updateOnboardingDebtRow(index, "paymentCadence", e.target.value)}
+                                  className={inputClass}
+                                >
+                                  <option value="monthly">Monthly</option>
+                                  <option value="biweekly">Biweekly</option>
+                                  <option value="one_time">One-Time</option>
+                                </select>
+                              </div>
+                              {onboardingDebts.length > 1 ? (
+                                <button
+                                  onClick={() => removeOnboardingDebtRow(index)}
+                                  className="mt-3 rounded-lg border border-[#c25757] px-3 py-2 text-xs font-semibold text-[#f5b1b1] hover:bg-[#2a1717]"
+                                >
+                                  Remove Debt
+                                </button>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <button
+                        onClick={handleSaveOnboardingSetup}
+                        disabled={saving}
+                        className="rounded-xl border border-[#d4af37] bg-[#1a1b20] px-4 py-3 text-sm font-semibold text-[#f5e4a3] hover:bg-[#23242b] disabled:opacity-50"
+                      >
+                        {saving ? "Saving Setup..." : "Save Onboarding Bills & Debts"}
+                      </button>
+                    </div>
                   </div>
                   <div className="rounded-xl border border-[#b68a2d] bg-[#111216] px-4 py-3">
                     <p className="text-xs uppercase tracking-wide text-[#d4af37] md:text-sm">Progress</p>
